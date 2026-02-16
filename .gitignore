@@ -1,0 +1,10 @@
+.DS_Store
+
+# SwiftPM/Xcode build artifacts
+.build/
+Derived/
+
+# User-specific Xcode state
+.swiftpm/xcode/
+WebScreenVCKit.xcodeproj/xcuserdata/
+*.xcuserstate
