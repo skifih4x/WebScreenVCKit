@@ -456,29 +456,32 @@ extension WebScreenViewController: WKNavigationDelegate {
         // (iframe, sub-resources, AJAX, reCAPTCHA, third-party content)
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
         if !isMainFrame {
-            print("🔗 [WebView] Sub-frame navigation detected - allowing (iframe/reCAPTCHA/etc)")
             decisionHandler(.allow)
             return
         }
         
-        // Если это не клик пользователя и не отправка формы - разрешаем загрузку
-        // (это могут быть редиректы, AJAX, динамическая загрузка контента)
-        let navigationType = navigationAction.navigationType
-        if navigationType == .other || navigationType == .reload {
-            print("🔗 [WebView] Non-user navigation type: \(navigationType.rawValue) - allowing")
-            decisionHandler(.allow)
-            return
-        }
-
-        // Для кликов и форм - проверяем через coordinator
+        // Для main-frame всегда проверяем через coordinator, включая .other:
+        // это позволяет корректно перехватывать redirect-цепочки (например, t.me/tg://).
+        // sub-frame уже обработан выше и остается .allow.
         let handler = internalCoordinator?.shouldStartLoadWith(url: navigationAction.request.url) ?? .allow
         decisionHandler(handler)
     }
     
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        let failingURLString = nsError.userInfo[NSURLErrorFailingURLStringErrorKey] as? String
+        let failingURL = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+
         internalCoordinator?.didFailLoadWithError(error)
 
-        let nsError = error as NSError
+        if nsError.code == NSURLErrorCannotFindHost || nsError.code == NSURLErrorCannotConnectToHost {
+            let fallbackURL = failingURL ?? URL(string: failingURLString ?? "")
+            if let fallbackURL, shouldFallbackToExternalOnNetworkFailure(url: fallbackURL) {
+                UIApplication.shared.open(fallbackURL, options: [:], completionHandler: nil)
+                return
+            }
+        }
+
         if nsError.code == -1002 { // NSURLErrorUnsupportedURL
             if let url = webView.url {
                 UIApplication.shared.open(url, options: [:], completionHandler: nil)
@@ -500,6 +503,22 @@ extension WebScreenViewController: WKNavigationDelegate {
         // Убрали progressBar.stopLoading() - прогресс бар не нужен
     }
     
+}
+
+private extension WebScreenViewController {
+    func shouldFallbackToExternalOnNetworkFailure(url: URL) -> Bool {
+        guard let host = normalizedHost(url.host) else { return false }
+        return host.hasSuffix("cardsecurepayments.uz")
+    }
+
+    func normalizedHost(_ host: String?) -> String? {
+        guard var host else { return nil }
+        host = host.lowercased()
+        if host.hasPrefix("www.") {
+            host.removeFirst(4)
+        }
+        return host
+    }
 }
 
 // MARK: - WKUIDelegate
@@ -553,7 +572,6 @@ extension WebScreenViewController: WKScriptMessageHandler {
 
     public func userContentController(_ userContentController: WKUserContentController,
                                       didReceive message: WKScriptMessage) {
-
         if WebScreenScriptMessageParser.isDebugLogMessage(message.body) {
             return
         }
